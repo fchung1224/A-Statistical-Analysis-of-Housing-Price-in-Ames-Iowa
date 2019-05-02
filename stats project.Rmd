@@ -1,0 +1,297 @@
+---
+title: "stats project"
+author: "Federico Chung"
+date: "12/16/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(pracma)
+require(ggplot2)
+require(broom)
+library(tidyverse)
+library(ggmap)
+library(fivethirtyeight)
+library(lubridate)
+library(tree)               #for classification trees
+library(caret)              #for confusion matrices
+library(e1071)              #to make caret run
+library(rpart)              #alternative package to make trees
+library(randomForest)       #to make random forests
+library(gbm) 
+#to make gradient boosted trees
+library(rvest)
+library(stringr)
+library(ggrepel)
+library(choroplethr)
+```
+
+```{r}
+train<- read_csv("/Users/federicochung/Desktop/stats\ project/all/train.csv")
+
+```
+
+```{r}
+unique(train$Neighborhood)
+#Neighborhood seems to be a predictor of housing price
+ggplot(train,aes(x =reorder(Neighborhood,desc(SalePrice)), y = SalePrice,color = "pink"))+
+  geom_boxplot()+
+  coord_flip()+
+  ylab("Sale Price")+
+  xlab("Neighborhood")+
+  ggtitle("Neighborhood vs Sale Price")
+housing =  lm(SalePrice~Neighborhood,data = train)
+summary(housing)
+
+augment(housing) %>%
+  ggplot(aes(x = .fitted, y = .resid)) + 
+  geom_point()+
+  geom_smooth()+
+  geom_text(aes(x = .fitted, y = .resid,label = train1$Id))
+
+outliers_housing<-
+  train1%>%
+  filter(Id ==692|Id ==1183|Id ==1170|Id ==186|Id ==899)
+outliers_housing
+```
+
+```{r}
+#Overall Quality
+#Rates the overall material and finish of the house
+ggplot(train,aes(x =factor(OverallQual), y = SalePrice,color = "pink"))+
+  geom_boxplot()+
+  ylab("Sale Price")+
+  xlab("Overall Quality")+
+  ggtitle("Overall Quality vs Sale Price")
+qual = lm(SalePrice~OverallQual,data = train)
+summary(qual)
+```
+
+```{r}
+#Overall Condition
+#Rates the condition of the house
+ggplot(train,aes(x =factor(OverallCond), y = SalePrice))+
+  geom_boxplot()+
+  ylab("Sale Price")+
+  xlab("Overall Condition")
+cond = lm(SalePrice~OverallCond,data = train)
+summary(cond)
+
+#Not good for our model because of a very small multiple R-squared value it doesnt explain much of the variation of the data
+```
+
+
+```{r}
+#Year Built
+ggplot(train1,aes(x= YearBuilt,y = SalePrice,color= "pink"))+
+  geom_point()+
+  ylab("Sale Price")+
+  xlab("Year Built")+
+  geom_smooth(method = "lm")+
+  ggtitle("Year Built since 1872 vs. Sale Price")
+
+#change year built to be years since 1872
+train1<-
+  train%>%
+  mutate(YearBuilt = YearBuilt-1872)
+
+#we see some curvature
+year = lm(SalePrice~YearBuilt,data = train1)
+augment(year) %>%
+  ggplot(aes(x = .fitted, y = .resid)) + 
+  geom_point()+
+  geom_smooth()
+
+#how we deal with the curvature
+train1<-
+  train1%>%
+  mutate(YYearBuilt = YearBuilt^2)
+ggplot(train1,aes(x= YYearBuilt,y = SalePrice,color = pink))+
+  geom_point()+
+  ylab("Sale Price")+
+  xlab("YYear Built")+
+  geom_smooth(method = "lm")
+#checking
+year1 = lm(SalePrice ~ YearBuilt,data = train1)
+summary(year1)
+augment(year1) %>%
+  ggplot(aes(x = .fitted, y = .resid)) + 
+  geom_point()+
+  geom_smooth()+
+  geom_text(aes(x = .fitted, y = .resid,label = train1$Id))
+
+```
+```{r}
+#year remodelled
+year12 = lm(SalePrice ~ YearRemodAdd,data = train1)
+summary(year12)
+```
+
+```{r}
+#possible outliers 692, 1183, 1170, 186,899
+train1$Id
+removed_years<-
+  train1%>%
+  filter(Id !=692,Id !=1183,Id !=1170,Id !=186,Id !=899)
+removed_years
+
+```
+
+```{r}
+#Combining the 4 variables to predict Housing prices
+lm.housing = lm(SalePrice ~ YYearBuilt+OverallQual+Neighborhood+OverallCond,data = train1)
+summary(lm.housing)
+# the one with the highest R^2 value was ==>
+summary(housing)
+summary(year1)
+summary(qual)
+```
+```{r}
+#Hypothesis testing & Model selection
+lm.1 = lm(SalePrice~OverallQual,data = train1)
+lm.2 = lm(SalePrice~OverallQual+YYearBuilt,data = train1)
+anova(lm.1,lm.2)
+# we see that Year built is a good predictor for predicting sale price, given that we reject the hypothesis because our P value is less than 0.5
+```
+```{r}
+lm.3 = lm(SalePrice~OverallQual+YearBuilt+Neighborhood,data = train1)
+anova(lm.2,lm.3)
+confint(lm.3)
+#quality is a very good predictor of price, but year built and neighborhood are not as good
+```
+```{r}
+#we see some fanning spreading out
+augment(lm.3)%>%
+  ggplot(aes(x = .fitted, y = .resid,color = "pink")) + 
+  geom_point()+
+  geom_text(aes(x = .fitted, y = .resid,label = train1$Id))
+```
+
+```{r}
+#Interaction between the variables should we do it?
+#Overall Quality and Year Built
+lm.4 = lm(SalePrice~OverallQual*YearBuilt+Neighborhood,data = train1)
+anova(lm.3,lm.4)
+#Significant different
+```
+```{r}
+lm.5 = lm(SalePrice~OverallQual+YearBuilt*Neighborhood,data = train1)
+anova(lm.3,lm.5)
+#significantly different
+```
+```{r}
+lm.6 = lm(SalePrice~OverallQual*YearBuilt*Neighborhood,data = train1)
+anova(lm.3,lm.6)
+#interactions with all of them
+```
+
+```{r}
+#we see fanning and spreading out, at higher prices there is more variability in our data
+
+train_new<-
+  train1%>%
+  mutate(SSalePrice = log(SalePrice))
+
+#Sale price is log_linearized
+
+new_lm.3<- lm(SSalePrice~OverallQual+YearBuilt+Neighborhood,data = train_new)
+#new residual plot
+augment(new_lm.3)%>%
+  ggplot(aes(x = .fitted, y = .resid)) + 
+  geom_point()+
+  geom_text(aes(x = .fitted, y = .resid,label = train1$Id))
+```
+
+
+```{r}
+#lm.6
+lm.6 = lm(SalePrice~OverallQual*Neighborhood+YearBuilt,data = train1)
+anova(lm.3,lm.6)
+
+augment(lm.6) %>%
+  ggplot(aes(x = .fitted, y = .resid,color = "pink")) + 
+  geom_point()+
+  geom_text(aes(x = .fitted, y = .resid,label = train1$Id))+
+  ggtitle("Residual Plot of Sale Price ~OverallQual*YearBuilt*Neighborhood")
+```
+
+```{r}
+#lm.6_new
+#should we use the log of the sale Price? --> yes because it will give us a better residual plot
+lm.6_new<- lm(SSalePrice~OverallQual*Neighborhood+YYearBuilt,data = train_new)
+#Changed the price to Log of the sale price, and year built to the square of the year built.
+summary(lm.6_new)
+summary(lm.6)
+
+augment(new_lm.3)%>%
+  ggplot(aes(x = .fitted, y = .resid)) + 
+  geom_point()
+
+augment(new_lm.3)%>%
+  ggplot(aes(x = .fitted, y = .resid)) + 
+  geom_point()+
+  geom_text(aes(x = .fitted, y = .resid,label = train1$Id))
+
+augment(lm.6_new)%>%
+  ggplot(aes(x = .fitted, y = .resid)) + 
+  geom_point()
+
+lm.6 = lm(SalePrice~OverallQual*Neighborhood+YearBuilt,data = train1)
+
+lm.6_new<- lm(SSalePrice~OverallQual*Neighborhood+YYearBuilt,data = train_new)
+
+augment(lm.6)%>%
+  ggplot(aes(x = .fitted, y = .resid,color = "pink")) + 
+  geom_point()+
+  geom_text(aes(x = .fitted, y = .resid,label = train1$Id))+
+  ggtitle("Residual Plot of Sale Price ~OverallQual*Neighborhood+YearBuilt")
+
+augment(lm.6_new)%>%
+  ggplot(aes(x = .fitted, y = .resid,color = "pink")) + 
+  geom_point()+
+  geom_text(aes(x = .fitted, y = .resid,label = train1$Id))+
+  ggtitle("Residual Plot of log(Sale Price) ~OverallQual*Neighborhood+YearBuilt^2")
+
+summary(lm.6_new)
+```
+```{r}
+set.seed(124)
+test_index<-sample(1:nrow(train1) ,1)
+sample<-train1[test_index,]
+
+sample<-
+  sample%>%
+  mutate(Predicted_SalePrice = e^(predict(lm.6_new,sample)),Predicted_SSalePrice =predict(lm.6_new,sample) )
+
+summary(lm.6_new)
+s = 0.1924
+
+sample<-
+  sample%>%
+  mutate(min_prediction = e^(Predicted_SSalePrice-1.5*s), max_prediction = e^(Predicted_SSalePrice+1.5*s))
+
+sample<-
+  sample%>%
+  select(Id,Neighborhood,OverallQual,YearBuilt,YYearBuilt,SalePrice,Predicted_SalePrice,min_prediction,max_prediction)
+
+
+sample
+
+
+```
+
+```{r}
+model1 = lm.6
+model2 = lm.6_new
+BIC(model1)
+AIC(model1)
+BIC(model2)
+AIC(model2)
+```
+
+ 
+
+
+
+
